@@ -142,10 +142,10 @@
         // ---------------------------------------------------------
         // 0. 配置 base (請替換為您的金鑰)
         // ---------------------------------------------------------
-        const SUPABASE_URL = 'https://fayorxvfxtrycjiiiyfu.supabase.coL'; 
+        const BASE_URL = 'https://fayorxvfxtrycjiiiyfu.supabaseClient.coL'; 
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZheW9yeHZmeHRyeWNqaWlpeWZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQyNzY1MTAsImV4cCI6MjA3OTg1MjUxMH0.7znE_AaNg6zESUO-RoSsyFqxCgcxjPT_pQiN557e6Nw';
         
-        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        const supabase = supabaseClient.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
         
         let currentUser = null; // 用於儲存當前登入用戶信息
 
@@ -348,14 +348,14 @@
                 const fileExt = file.name.split('.').pop();
                 const filePath = `${currentUser.id}/${Date.now()}.${fileExt}`;
 
-                const { data: uploadData, error: uploadError } = await supabase.storage
+                const { data: uploadData, error: uploadError } = await supabaseClient.storage
                     .from('reports') // Storage Bucket 名稱
                     .upload(filePath, file);
 
                 if (uploadError) throw uploadError;
                 
                 // 取得公開 URL
-                const { data: { publicUrl } } = supabase.storage
+                const { data: { publicUrl } } = supabaseClient.storage
                     .from('reports')
                     .getPublicUrl(filePath);
 
@@ -420,7 +420,7 @@
         }
 
         // 監聽登入狀態
-        supabase.auth.onAuthStateChange((event, session) => {
+        supabaseClient.auth.onAuthStateChange((event, session) => {
             const authStatusDiv = document.getElementById('auth-status');
             const uploadSection = document.getElementById('upload-section');
             
@@ -527,7 +527,7 @@ async function saveUserProfile() {
     }
 }
 
-        supabase.auth.onAuthStateChange((event, session) => {
+        supabaseClient.auth.onAuthStateChange((event, session) => {
     // ... (省略現有的 UI 處理邏輯) ...
     
     if (session) {
