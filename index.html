@@ -92,6 +92,20 @@
     </style>
 </head>
 <body>
+    <section id="profile-setup-section" style="margin-top: 30px; padding: 20px; border: 1px solid #E5E7EB; border-radius: 8px;" class="hidden">
+    <h2><i class="fas fa-user-edit"></i> 個人資料設定</h2>
+    <p>為了精準分析您的身體成分，請提供您的基本資訊：</p>
+    
+    <label for="profile-height">身高 (cm):</label>
+    <input type="number" id="profile-height" placeholder="請輸入您的身高 (公分)" min="50" max="250" required style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #D1D5DB; border-radius: 4px;">
+
+    <label for="profile-age">年齡:</label>
+    <input type="number" id="profile-age" placeholder="請輸入您的年齡" min="10" max="100" required style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #D1D5DB; border-radius: 4px;">
+
+    <button id="save-profile-btn">保存個人資料</button>
+    
+    <div id="profile-message" class="message" style="display: none;"></div>
+</section>
 
     <div id="app-container">
         <h1>身體成分分析</h1>
@@ -112,10 +126,10 @@
 
     <script>
         // ---------------------------------------------------------
-        // 0. 配置 Supabase (請替換為您的金鑰)
+        // 0. 配置 base (請替換為您的金鑰)
         // ---------------------------------------------------------
-        const SUPABASE_URL = 'YOUR_SUPABASE_URL'; 
-        const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+        const SUPABASE_URL = 'https://fayorxvfxtrycjiiiyfu.supabase.coL'; 
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZheW9yeHZmeHRyeWNqaWlpeWZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQyNzY1MTAsImV4cCI6MjA3OTg1MjUxMH0.7znE_AaNg6zESUO-RoSsyFqxCgcxjPT_pQiN557e6Nw';
         
         const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
         
@@ -412,6 +426,105 @@
         document.addEventListener('DOMContentLoaded', setupAnalysisListeners);
         // 為了測試方便，您可以移除上面的事件監聽器並手動調用 setupAnalysisListeners()
         // setupAnalysisListeners(); 
+
+        /**
+ * 載入當前用戶的個人資料 (從 profiles 表格)
+ * @param {string} userId - 當前登入用戶的 UUID
+ * @returns {object} 包含 height_cm, age, gender 等資訊
+ */
+async function loadUserProfile(userId) {
+    const { data, error } = await supabase
+        .from('profiles')
+        .select('height_cm, age, gender')
+        .eq('id', userId)
+        .single();
+    
+    if (error && error.code !== 'PGRST116') { // PGRST116: 找不到單一記錄
+        console.error('獲取用戶資料失敗:', error);
+        return {}; 
+    }
+    
+    // 如果找到了數據，則填充表單
+    if (data) {
+        document.getElementById('profile-height').value = data.height_cm || '';
+        document.getElementById('profile-age').value = data.age || '';
+        document.getElementById('profile-setup-section').classList.remove('hidden');
+        return data;
+    }
+
+    // 找不到數據也顯示介面，讓用戶輸入
+    document.getElementById('profile-setup-section').classList.remove('hidden');
+    return {};
+}
+
+        /**
+ * 保存或更新用戶的個人資料到 profiles 表格
+ */
+async function saveUserProfile() {
+    if (!currentUser) {
+        showMessage(document.getElementById('profile-message'), '請先登入才能保存資料。', 'danger');
+        return;
+    }
+
+    const height = document.getElementById('profile-height').value;
+    const age = document.getElementById('profile-age').value;
+    const profileMessageDiv = document.getElementById('profile-message');
+
+    if (!height || !age) {
+        showMessage(profileMessageDiv, '請填寫身高和年齡。', 'danger');
+        return;
+    }
+
+    setLoadingState('save-profile-btn', true, '保存中...');
+
+    try {
+        const profileData = {
+            id: currentUser.id, // Supabase RLS 策略要求這欄位
+            height_cm: parseFloat(height),
+            age: parseInt(age),
+            // gender: 'male' // 這裡可以根據您之後的選擇欄位來填充
+        };
+
+        // 嘗試更新（如果記錄存在）
+        const { error: updateError } = await supabase
+            .from('profiles')
+            .update(profileData)
+            .eq('id', currentUser.id);
+
+        if (updateError && updateError.code === 'PGRST104') {
+             // 錯誤代碼 PGRST104 通常表示 "No rows were updated"，即記錄不存在，需要插入
+             const { error: insertError } = await supabase
+                .from('profiles')
+                .insert(profileData);
+            
+            if (insertError) throw insertError;
+
+        } else if (updateError) {
+             throw updateError;
+        }
+
+        showMessage(profileMessageDiv, '個人資料保存成功！', 'success');
+
+    } catch (error) {
+        console.error('保存個人資料失敗:', error);
+        showMessage(profileMessageDiv, `保存失敗：${error.message}`, 'danger');
+    } finally {
+        setLoadingState('save-profile-btn', false, '保存個人資料');
+    }
+}
+
+        supabase.auth.onAuthStateChange((event, session) => {
+    // ... (省略現有的 UI 處理邏輯) ...
+    
+    if (session) {
+        // ... (省略現有程式碼) ...
+        // ⬇️ 新增：載入用戶個人資料 ⬇️
+        loadUserProfile(session.user.id);
+        
+    } else {
+        // ... (省略現有程式碼) ...
+    }
+});
     </script>
 </body>
 </html>
