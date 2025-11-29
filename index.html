@@ -108,7 +108,21 @@
 </section>
 
     <div id="app-container">
+        
         <h1>身體成分分析</h1>
+        <section id="auth-form-section" style="margin-top: 20px; padding: 20px; border: 1px solid #E5E7EB; border-radius: 8px;">
+    <h3>用戶登入 / 註冊</h3>
+    <input type="email" id="auth-email" placeholder="電子郵件" required style="width: 100%; padding: 8px; margin-bottom: 10px; border: 1px solid #D1D5DB; border-radius: 4px;">
+    <input type="password" id="auth-password" placeholder="密碼" required style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #D1D5DB; border-radius: 4px;">
+    
+    <div style="display: flex; justify-content: space-between;">
+        <button id="signup-btn" style="flex: 1; margin-right: 10px;">註冊</button>
+        <button id="signin-btn" style="flex: 1;">登入</button>
+    </div>
+    
+    <button id="signout-btn" class="hidden" style="width: 100%; margin-top: 15px; background-color: var(--danger);">登出</button>
+    <div id="auth-message" class="message" style="margin-top: 15px; padding: 10px; text-align: center; border: 1px solid transparent; display: none;"></div>
+</section>
         <div id="auth-status">請先登入</div>
         
         <section id="upload-section" class="hidden">
