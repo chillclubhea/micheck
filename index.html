@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>身體成分報告分析器</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script> 
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --primary: #4F46E5; /* 靛藍色 */
+            --bg: #F3F4F6;
+            --card-bg: #FFFFFF;
+            --text-main: #1F2937;
+            --danger: #EF4444;
+            --success: #10B981;
+        }
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            padding: 20px;
+            margin: 0;
+        }
+        #app-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        h2 {
+            color: var(--primary);
+            border-bottom: 2px solid #E5E7EB;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+            font-weight: 700;
+        }
+        input[type="file"] {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #D1D5DB;
+            border-radius: 6px;
+        }
+        button {
+            background-color: var(--primary);
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:disabled {
+            background-color: #9CA3AF;
+            cursor: not-allowed;
+        }
+        .message {
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 15px;
+            display: none;
+        }
+        .success { background-color: #D1FAE5; color: var(--success); }
+        .danger { background-color: #FEE2E2; color: var(--danger); }
+        .hidden { display: none; }
+        
+        /* 結果呈現樣式 */
+        .analysis-card {
+            background-color: #F9FAFB;
+            border-left: 5px solid var(--primary);
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+        }
+        .analysis-card h3 {
+            margin-top: 0;
+            color: var(--primary);
+            font-size: 1.1em;
+        }
+        .recommendation {
+            border-left-color: var(--danger);
+            background-color: #FEF2F2;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        <h1>身體成分分析</h1>
+        <div id="auth-status">請先登入</div>
+        
+        <section id="upload-section" class="hidden">
+            <h2>上傳報告</h2>
+            <input type="file" id="report-upload" accept="image/*">
+            <button id="analyze-btn" disabled>開始分析</button>
+            <div id="upload-message" class="message"></div>
+        </section>
+
+        <section id="results-section" class="hidden">
+            <h2>專屬分析報告</h2>
+            <div id="analysis-output">正在等待分析...</div>
+        </section>
+    </div>
+
+    <script>
+        // ---------------------------------------------------------
+        // 0. 配置 Supabase (請替換為您的金鑰)
+        // ---------------------------------------------------------
+        const SUPABASE_URL = 'YOUR_SUPABASE_URL'; 
+        const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+        
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        
+        let currentUser = null; // 用於儲存當前登入用戶信息
+
+
+        // ---------------------------------------------------------
+        // 1. 輔助工具函式
+        // ---------------------------------------------------------
+
+        function setLoadingState(buttonId, isLoading, loadingText = '') {
+            const button = document.getElementById(buttonId);
+            if (!button) return;
+            
+            if (isLoading) {
+                button.classList.add('loading');
+                button.disabled = true;
+                if (loadingText) {
+                    button.dataset.originalText = button.textContent;
+                    button.textContent = loadingText;
+                }
+            } else {
+                button.classList.remove('loading');
+                button.disabled = false;
+                if (button.dataset.originalText) {
+                    button.textContent = button.dataset.originalText;
+                    delete button.dataset.originalText;
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 2. 資料庫操作：獲取用戶資料 (Profiles)
+        // ---------------------------------------------------------
+        
+        /**
+         * 獲取用戶的身高 (從 profiles 表格)
+         * 這是計算 BMI 必不可少的
+         */
+        async function loadUserProfile(userId) {
+            const { data, error } = await supabase
+                .from('profiles')
+                .select('height_cm, age, gender')
+                .eq('id', userId)
+                .single();
+            
+            if (error) {
+                console.error('獲取用戶資料失敗:', error);
+                // 假設一個預設值，避免程式崩潰
+                return { height_cm: 170, age: 30, gender: 'male' }; 
+            }
+            return data;
+        }
+
+        // ---------------------------------------------------------
+        // 3. OCR 數據解析與業務邏輯
+        // ---------------------------------------------------------
+
+        /**
+         * 專屬分析報告生成函式 (業務邏輯)
+         * 這是將數據轉化為建議的核心部分。
+         */
+        function analyzeBodyComposition(structuredData, userProfile) {
+            const weight = structuredData.weight_kg || 0;
+            const fat_mass = structuredData.bfm_kg || 0;
+            const muscle_mass = structuredData.smm_kg || 0;
+            // 確保身高以米為單位 (如果 profile 中沒有，則使用 170cm)
+            const height_m = (userProfile.height_cm || 170) / 100; 
+            const fat_percentage = structuredData.body_fat_percentage || (weight > 0 ? (fat_mass / weight) * 100 : 0);
+
+            // 示範目標值 (請根據專業標準調整)
+            const TARGET_FAT_PERCENTAGE_MALE = 15; 
+            const TARGET_MUSCLE_KG = 30; // 粗略的示範目標
+            
+            const bmi = weight > 0 && height_m > 0 ? (weight / (height_m ** 2)) : 0;
+            let recommendation = "";
+
+            // 建議生成邏輯
+            if (bmi === 0 || fat_percentage === 0) {
+                recommendation = "數據不足，無法生成詳細報告。請確認圖片清晰並包含體重等關鍵數據。";
+            } else if (fat_percentage > TARGET_FAT_PERCENTAGE_MALE + 5) {
+                recommendation = "高體脂風險！您的體脂率明顯超標。建議立即調整高油高糖飲食，並增加每週 3-5 次中高強度有氧運動。";
+            } else if (muscle_mass < TARGET_MUSCLE_KG && fat_percentage < TARGET_FAT_PERCENTAGE_MALE + 5) {
+                recommendation = "需增肌！您的體成分比例屬於隱性肥胖或肌肉量偏低。建議增加蛋白質攝取，並專注於每週 2-3 次全身力量訓練。";
+            } else {
+                recommendation = "身體成分良好，比例均衡。請繼續保持規律的運動和均衡的營養攝取！";
+            }
+            
+            return {
+                "summary": `您的體脂率為 ${fat_percentage.toFixed(1)}%，骨骼肌量為 ${muscle_mass.toFixed(1)} kg。`,
+                "recommendation": recommendation,
+                "bmi": bmi.toFixed(2),
+                "visceral_fat": structuredData.visceral_fat_level || 'N/A'
+            };
+        }
+
+        /**
+         * 步驟 3: 定製解析邏輯 (從 OCR 原始文本中提取出結構化的數值)
+         */
+        function parseInBodyReport(rawText) {
+            console.log("OCR 提取的原始文字:", rawText); // 供調試用
+            
+            const normalizedText = rawText.toLowerCase().replace(/[\s\r\n]+/g, '');
+            const data = {};
+
+            // 輔助函式：使用正規表達式安全地查找數值
+            const findValue = (keyword, groupIndex = 1) => {
+                // 匹配模式示例：/體重[^0-9]*([0-9]+\.[0-9]+)/i
+                const regex = new RegExp(`${keyword}[^0-9]*([0-9]+\\.?[0-9]*)`, 'i');
+                const match = normalizedText.match(regex);
+                
+                if (match && match[groupIndex]) {
+                    return parseFloat(match[groupIndex]);
+                }
+                return null;
+            };
+
+            // 核心數據提取
+            data.weight_kg = findValue('體重|weight');
+            data.smm_kg = findValue('骨骼肌|skeletalmusclemass|smm');
+            data.bfm_kg = findValue('體脂肪量|bodyfatmass|bfm');
+            data.body_fat_percentage = findValue('體脂肪率|bodyfatpercent|pbf|p.b.f.');
+            data.visceral_fat_level = findValue('內臟脂肪|visceralfatlevel|v.f.l.'); // 內臟脂肪通常是整數
+
+            // 篩選出有效的數值
+            const finalData = {};
+            for (const key in data) {
+                if (data[key] !== null && !isNaN(data[key])) {
+                    finalData[key] = data[key];
+                }
+            }
+            
+            return finalData;
+        }
+
+        /**
+         * 處理 OCR 識別，使用 Tesseract.js
+         */
+        async function analyzeImageWithOCR(imageFile) {
+            const { data: { text } } = await Tesseract.recognize(
+              imageFile,
+              'eng+chi_tra', 
+              { 
+                logger: m => console.log('OCR進度:', m.status, (m.progress * 100).toFixed(0) + '%') // 顯示進度
+              }
+            );
+            
+            return parseInBodyReport(text);
+        }
+
+        // ---------------------------------------------------------
+        // 4. 核心流程：上傳、OCR 與分析
+        // ---------------------------------------------------------
+
+        /**
+         * 格式化並顯示最終報告到網頁
+         */
+        function displayAnalysisResults(report) {
+            const resultsDiv = document.getElementById('analysis-output');
+            
+            resultsDiv.innerHTML = `
+                <div class="analysis-card">
+                    <h3>總結分析</h3>
+                    <p>${report.summary}</p>
+                </div>
+                <div class="analysis-card">
+                    <h3>關鍵數據</h3>
+                    <p><strong>BMI:</strong> ${report.bmi}</p>
+                    <p><strong>內臟脂肪等級:</strong> ${report.visceral_fat}</p>
+                </div>
+                <div class="analysis-card recommendation">
+                    <h3>專屬建議</h3>
+                    <p>${report.recommendation}</p>
+                </div>
+            `;
+            document.getElementById('results-section').classList.remove('hidden');
+        }
+
+
+        /**
+         * 處理文件選擇並啟動分析的主函式
+         */
+        async function handleFileAnalysis() {
+            const uploadInput = document.getElementById('report-upload');
+            const resultsDiv = document.getElementById('analysis-output');
+            const file = uploadInput.files[0];
+            const uploadMsg = document.getElementById('upload-message');
+            
+            if (!file || !currentUser) {
+                uploadMsg.textContent = "請先登入並選擇報告圖片。";
+                uploadMsg.className = 'message danger';
+                uploadMsg.style.display = 'block';
+                return;
+            }
+
+            setLoadingState('analyze-btn', true, '分析中...');
+            resultsDiv.innerHTML = '正在上傳圖片並進行複雜的圖像識別，請稍候...';
+            document.getElementById('results-section').classList.remove('hidden');
+            
+            try {
+                // 1. 上傳圖片到 Supabase Storage
+                const fileExt = file.name.split('.').pop();
+                const filePath = `${currentUser.id}/${Date.now()}.${fileExt}`;
+
+                const { data: uploadData, error: uploadError } = await supabase.storage
+                    .from('reports') // Storage Bucket 名稱
+                    .upload(filePath, file);
+
+                if (uploadError) throw uploadError;
+                
+                // 取得公開 URL
+                const { data: { publicUrl } } = supabase.storage
+                    .from('reports')
+                    .getPublicUrl(filePath);
+
+                // 2. 獲取用戶資料
+                const userProfile = await loadUserProfile(currentUser.id);
+                
+                // 3. OCR 識別
+                resultsDiv.innerHTML = `圖片上傳成功！正在進行OCR...（請查看 Console 追蹤進度）`;
+                const structuredData = await analyzeImageWithOCR(file); 
+                
+                // 4. 生成報告
+                resultsDiv.innerHTML = `OCR完成！正在生成專屬報告...`;
+                const analysisReport = analyzeBodyComposition(structuredData, userProfile);
+                
+                // 5. 儲存結果到資料庫
+                const { error: insertError } = await supabase
+                    .from('analysis_results')
+                    .insert({
+                        user_id: currentUser.id,
+                        report_image_url: publicUrl,
+                        raw_data_json: structuredData,
+                        report_text: analysisReport.recommendation,
+                        status: 'completed'
+                    });
+
+                if (insertError) {
+                    console.error('儲存分析結果失敗:', insertError);
+                    resultsDiv.innerHTML += '<p class="message danger" style="display:block;">警告：分析結果儲存失敗，但報告已生成。</p>';
+                }
+
+                // 6. 顯示結果
+                displayAnalysisResults(analysisReport);
+                uploadMsg.style.display = 'none';
+                
+            } catch (error) {
+                console.error('分析流程發生錯誤:', error);
+                resultsDiv.innerHTML = `<p class="message danger" style="display:block;">分析失敗：${error.message || '請檢查 Supabase 設置、Storage 權限或圖片品質。'}</p>`;
+                document.getElementById('results-section').classList.remove('hidden');
+            } finally {
+                setLoadingState('analyze-btn', false, '開始分析');
+            }
+        }
+
+
+        // ---------------------------------------------------------
+        // 5. 初始化與事件監聽
+        // ---------------------------------------------------------
+
+        function setupAnalysisListeners() {
+            const uploadInput = document.getElementById('report-upload');
+            const analyzeBtn = document.getElementById('analyze-btn');
+            
+            uploadInput.addEventListener('change', () => {
+                if (uploadInput.files.length > 0) {
+                    analyzeBtn.disabled = false;
+                } else {
+                    analyzeBtn.disabled = true;
+                }
+            });
+
+            analyzeBtn.addEventListener('click', handleFileAnalysis);
+        }
+
+        // 監聽登入狀態
+        supabase.auth.onAuthStateChange((event, session) => {
+            const authStatusDiv = document.getElementById('auth-status');
+            const uploadSection = document.getElementById('upload-section');
+            
+            if (session) {
+                currentUser = session.user;
+                authStatusDiv.innerHTML = `已登入：${currentUser.email}`;
+                uploadSection.classList.remove('hidden');
+                // 這裡應該設置一個登出按鈕或其他介面
+            } else {
+                currentUser = null;
+                authStatusDiv.innerHTML = `請透過 Supabase 登入介面進行登入/註冊。`;
+                uploadSection.classList.add('hidden');
+            }
+        });
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', setupAnalysisListeners);
+        // 為了測試方便，您可以移除上面的事件監聽器並手動調用 setupAnalysisListeners()
+        // setupAnalysisListeners(); 
+    </script>
+</body>
+</html>
